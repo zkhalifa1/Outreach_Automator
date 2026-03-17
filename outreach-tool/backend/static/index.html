@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Outreach Automation Tool</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: #f3f4f6;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+
+        .status-badge {
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .spinner {
+            border: 3px solid #e5e7eb;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 0.6s linear infinite;
+            display: inline-block;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(4px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            padding: 12px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .toast-success {
+            background: #059669;
+        }
+
+        .toast-error {
+            background: #dc2626;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        const API = '/api';
+
+        // ─── Helpers ───
+        async function api(path, options = {}) {
+            const res = await fetch(`${API}${path}`, {
+                headers: { 'Content-Type': 'application/json' },
+                ...options,
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: res.statusText }));
+                throw new Error(err.detail || 'Request failed');
+            }
+            return res.json();
+        }
+
+        const STATUS_COLORS = {
+            'noch nicht kontaktiert': 'bg-gray-100 text-gray-700',
+            'email gesendet': 'bg-blue-100 text-blue-700',
+            'follow-up fällig': 'bg-yellow-100 text-yellow-800',
+            'follow up gesendet': 'bg-purple-100 text-purple-700',
+            'in kontakt': 'bg-green-100 text-green-700',
+            'keine rückmeldung': 'bg-red-100 text-red-700',
+        };
+
+        const STATUS_LABELS = {
+            'noch nicht kontaktiert': 'Not Contacted',
+            'email gesendet': 'Email Sent',
+            'follow-up fällig': 'Follow-up Due',
+            'follow up gesendet': 'Follow-up Sent',
+            'in kontakt': 'In Contact',
+            'keine rückmeldung': 'No Response',
+        };
+
+        function StatusBadge({ status }) {
+            const s = (status || '').toLowerCase();
+            const color = STATUS_COLORS[s] || 'bg-gray-100 text-gray-600';
+            const label = STATUS_LABELS[s] || status || 'Unknown';
+            return <span className={`status-badge ${color}`}>{label}</span>;
+        }
+
+        function Toast({ message, type, onClose }) {
+            useEffect(() => {
+                const t = setTimeout(onClose, 4000);
+                return () => clearTimeout(t);
+            }, [onClose]);
+            return <div className={`toast toast-${type}`}>{message}</div>;
+        }
+
+        // ─── Auth Panel ───
+        function AuthPanel({ authState, onLogin, onComplete, onLogout }) {
+            if (authState.authenticated) {
+                const user = authState.accounts?.[0]?.username || 'User';
+                return (
+                    <div className="flex items-center gap-3">
+                        <span className="text-sm text-green-700 font-medium">● Connected as {user}</span>
+                        <button onClick={onLogout} className="text-sm text-gray-500 hover:text-red-600">Logout</button>
+                    </div>
+                );
+            }
+            if (authState.flow) {
+                return (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 fade-in">
+                        <p className="text-sm font-medium text-yellow-800 mb-2">Complete sign-in:</p>
+                        <p className="text-sm text-yellow-700 mb-3">{authState.flow.message}</p>
+                        <div className="flex gap-2">
+                            <a href={authState.flow.verification_uri} target="_blank" rel="noopener"
+                                className="bg-yellow-600 text-white text-sm px-4 py-1.5 rounded hover:bg-yellow-700">
+                                Open Microsoft Login
+                            </a>
+                            <button onClick={onComplete}
+                                className="bg-white border border-yellow-300 text-yellow-700 text-sm px-4 py-1.5 rounded hover:bg-yellow-50">
+                                I've signed in
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+            return (
+                <button onClick={onLogin}
+                    className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700">
+                    Sign in with Microsoft
+                </button>
+            );
+        }
+
+        // ─── Status Cards ───
+        function StatusCards({ summary, onFilter }) {
+            if (!summary) return null;
+            const { by_status = {}, total_firms = 0 } = summary;
+
+            const order = [
+                'noch nicht kontaktiert', 'email gesendet', 'follow-up fällig',
+                'follow up gesendet', 'in kontakt', 'keine rückmeldung',
+            ];
+
+            return (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6 fade-in">
+                    <div className="bg-white rounded-lg p-4 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
+                        onClick={() => onFilter(null)}>
+                        <div className="text-2xl font-bold text-gray-800">{total_firms}</div>
+                        <div className="text-xs text-gray-500 mt-1">Total Firms</div>
+                    </div>
+                    {order.map(s => (
+                        <div key={s}
+                            className="bg-white rounded-lg p-4 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
+                            onClick={() => onFilter(s)}>
+                            <div className="text-2xl font-bold text-gray-800">{by_status[s] || 0}</div>
+                            <div className="text-xs text-gray-500 mt-1">{STATUS_LABELS[s]}</div>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
+        // ─── Firms Table ───
+        function FirmsTable({ firms, loading }) {
+            if (loading) return <div className="text-center py-8"><span className="spinner"></span></div>;
+            if (!firms || firms.length === 0) {
+                return <p className="text-gray-400 text-center py-8">No firms to display.</p>;
+            }
+            return (
+                <div className="bg-white rounded-lg shadow-sm overflow-hidden fade-in">
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
+                                <tr>
+                                    <th className="px-4 py-3 text-left">Firm</th>
+                                    <th className="px-4 py-3 text-left">Location</th>
+                                    <th className="px-4 py-3 text-left">Contact</th>
+                                    <th className="px-4 py-3 text-left">Email</th>
+                                    <th className="px-4 py-3 text-left">Status</th>
+                                    <th className="px-4 py-3 text-left">Last Contact</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {firms.map((f, i) => (
+                                    <tr key={i} className="hover:bg-gray-50">
+                                        <td className="px-4 py-3 font-medium text-gray-800">{f.firmenname}</td>
+                                        <td className="px-4 py-3 text-gray-600">{f.standort}</td>
+                                        <td className="px-4 py-3 text-gray-600">{f.ansprechpartner || '—'}</td>
+                                        <td className="px-4 py-3 text-gray-500 text-xs">{f.email_general || f.email_contact || '—'}</td>
+                                        <td className="px-4 py-3"><StatusBadge status={f.status} /></td>
+                                        <td className="px-4 py-3 text-gray-500">{f.letzte_kommunikation || f.datum_gesendet || '—'}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        // ─── Outreach Panel ───
+        function OutreachPanel({ onSend, loading }) {
+            const [emailCol, setEmailCol] = useState('email_general');
+            const [dryRun, setDryRun] = useState(true);
+            const [preview, setPreview] = useState(null);
+            const [previewing, setPreviewing] = useState(false);
+
+            async function handlePreview() {
+                setPreviewing(true);
+                try {
+                    const data = await api('/outreach/preview', {
+                        method: 'POST',
+                        body: JSON.stringify({ email_column: emailCol }),
+                    });
+                    setPreview(data);
+                } catch (e) {
+                    setPreview({ error: e.message });
+                }
+                setPreviewing(false);
+            }
+
+            return (
+                <div className="bg-white rounded-lg shadow-sm p-6 mb-6 fade-in">
+                    <h2 className="text-lg font-semibold text-gray-800 mb-4">Send Outreach</h2>
+
+                    <div className="flex flex-wrap items-center gap-4 mb-4">
+                        <div>
+                            <label className="text-xs text-gray-500 block mb-1">Email Column</label>
+                            <select value={emailCol} onChange={e => setEmailCol(e.target.value)}
+                                className="border border-gray-300 rounded px-3 py-1.5 text-sm">
+                                <option value="email_general">General Email (Col D)</option>
+                                <option value="email_contact">Contact Person (Col H)</option>
+                            </select>
+                        </div>
+                        <div className="flex items-center gap-2 mt-4">
+                            <input type="checkbox" id="dryRun" checked={dryRun}
+                                onChange={e => setDryRun(e.target.checked)} />
+                            <label htmlFor="dryRun" className="text-sm text-gray-600">Dry run (no emails sent)</label>
+                        </div>
+                    </div>
+
+                    <div className="flex gap-2 mb-4">
+                        <button onClick={handlePreview} disabled={previewing}
+                            className="bg-gray-100 text-gray-700 px-4 py-2 rounded text-sm hover:bg-gray-200 disabled:opacity-50">
+                            {previewing ? 'Loading...' : 'Preview Batch'}
+                        </button>
+                        <button onClick={() => onSend(emailCol, dryRun)} disabled={loading}
+                            className={`px-4 py-2 rounded text-sm text-white ${dryRun ? 'bg-blue-600 hover:bg-blue-700' : 'bg-red-600 hover:bg-red-700'} disabled:opacity-50`}>
+                            {loading ? <span className="spinner"></span> : dryRun ? 'Send (Dry Run)' : 'Send Emails'}
+                        </button>
+                    </div>
+
+                    {preview && !preview.error && (
+                        <div className="text-sm fade-in">
+                            <p className="text-green-700 font-medium">{preview.eligible_count} firm(s) eligible</p>
+                            {preview.skipped_count > 0 && (
+                                <p className="text-yellow-600">{preview.skipped_count} skipped</p>
+                            )}
+                            {preview.template?.subject && (
+                                <p className="text-gray-500 mt-2">Subject: <em>{preview.template.subject}</em></p>
+                            )}
+                            {preview.eligible?.length > 0 && (
+                                <ul className="mt-2 space-y-1">
+                                    {preview.eligible.map((f, i) => (
+                                        <li key={i} className="text-gray-600">• {f.firmenname} → {f[emailCol]}</li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    )}
+                    {preview?.error && <p className="text-red-600 text-sm">{preview.error}</p>}
+                </div>
+            );
+        }
+
+        // ─── Follow-Up Panel ───
+        function FollowUpPanel({ dueFirms, onTrigger, loading }) {
+            const [dryRun, setDryRun] = useState(true);
+            return (
+                <div className="bg-white rounded-lg shadow-sm p-6 mb-6 fade-in">
+                    <h2 className="text-lg font-semibold text-gray-800 mb-2">Follow-Ups</h2>
+                    <p className="text-sm text-gray-500 mb-4">
+                        {dueFirms?.length || 0} firm(s) due for follow-up. Auto-check runs daily at 9:00 AM.
+                    </p>
+                    <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2">
+                            <input type="checkbox" id="fuDryRun" checked={dryRun}
+                                onChange={e => setDryRun(e.target.checked)} />
+                            <label htmlFor="fuDryRun" className="text-sm text-gray-600">Dry run</label>
+                        </div>
+                        <button onClick={() => onTrigger(dryRun)} disabled={loading || !dueFirms?.length}
+                            className="bg-purple-600 text-white px-4 py-2 rounded text-sm hover:bg-purple-700 disabled:opacity-50">
+                            {loading ? <span className="spinner"></span> : 'Trigger Follow-Ups'}
+                        </button>
+                    </div>
+                    {dueFirms?.length > 0 && (
+                        <ul className="mt-3 space-y-1 text-sm">
+                            {dueFirms.map((f, i) => (
+                                <li key={i} className="text-gray-600">• {f.firmenname} — last email: {f.letzte_kommunikation || f.datum_gesendet}</li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            );
+        }
+
+        // ─── Inbox Monitor Panel ───
+        function InboxPanel({ contactedCount, onCheck, loading }) {
+            const [dryRun, setDryRun] = useState(true);
+            return (
+                <div className="bg-white rounded-lg shadow-sm p-6 mb-6 fade-in">
+                    <h2 className="text-lg font-semibold text-gray-800 mb-2">Inbox Monitor</h2>
+                    <p className="text-sm text-gray-500 mb-4">
+                        {contactedCount || 0} contacted firm(s) to monitor for replies. Auto-check runs every 30 min.
+                    </p>
+                    <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2">
+                            <input type="checkbox" id="inboxDryRun" checked={dryRun}
+                                onChange={e => setDryRun(e.target.checked)} />
+                            <label htmlFor="inboxDryRun" className="text-sm text-gray-600">Dry run</label>
+                        </div>
+                        <button onClick={() => onCheck(dryRun)} disabled={loading || !contactedCount}
+                            className="bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700 disabled:opacity-50">
+                            {loading ? <span className="spinner"></span> : 'Check Inbox'}
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // ─── Activity Log ───
+        function ActivityLog({ logs, loading, onRefresh }) {
+            return (
+                <div className="bg-white rounded-lg shadow-sm p-6 fade-in">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-semibold text-gray-800">Activity Log</h2>
+                        <button onClick={onRefresh} className="text-sm text-blue-600 hover:text-blue-800">Refresh</button>
+                    </div>
+                    {loading ? (
+                        <div className="text-center py-4"><span className="spinner"></span></div>
+                    ) : logs?.length === 0 ? (
+                        <p className="text-gray-400 text-center py-4">No activity yet.</p>
+                    ) : (
+                        <div className="space-y-2 max-h-80 overflow-y-auto">
+                            {(logs || []).map((entry, i) => (
+                                <div key={i} className="flex items-start gap-3 py-2 border-b border-gray-50 text-sm">
+                                    <span className="text-gray-400 text-xs whitespace-nowrap mt-0.5">
+                                        {new Date(entry.timestamp).toLocaleString('de-DE')}
+                                    </span>
+                                    <span className={`text-xs font-medium px-2 py-0.5 rounded ${entry.action_type.includes('fail') || entry.action_type.includes('error')
+                                        ? 'bg-red-50 text-red-600'
+                                        : entry.action_type.includes('reply_detected') ? 'bg-teal-50 text-teal-700'
+                                            : entry.dry_run ? 'bg-gray-100 text-gray-500' : 'bg-green-50 text-green-700'
+                                        }`}>
+                                        {entry.action_type}{entry.dry_run ? ' (dry)' : ''}
+                                    </span>
+                                    <span className="text-gray-700">{entry.firm_name}</span>
+                                    {entry.email_to && <span className="text-gray-400">→ {entry.email_to}</span>}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ─── Main App ───
+        function App() {
+            const [authState, setAuthState] = useState({ authenticated: false });
+            const [summary, setSummary] = useState(null);
+            const [firms, setFirms] = useState([]);
+            const [dueFirms, setDueFirms] = useState([]);
+            const [logs, setLogs] = useState([]);
+            const [toast, setToast] = useState(null);
+            const [loading, setLoading] = useState({});
+            const [activeFilter, setActiveFilter] = useState(null);
+            const [tab, setTab] = useState('overview'); // overview | outreach | log
+
+            function showToast(message, type = 'success') {
+                setToast({ message, type });
+            }
+
+            // ─── Data fetching ───
+            const fetchAuth = useCallback(() => api('/auth/status').then(setAuthState).catch(() => { }), []);
+            const fetchSummary = useCallback(() => api('/dashboard/summary').then(setSummary).catch(() => { }), []);
+            const fetchFirms = useCallback((status) => {
+                const path = status ? `/dashboard/firms?status=${encodeURIComponent(status)}` : '/dashboard/firms';
+                return api(path).then(d => setFirms(d.firms || [])).catch(() => { });
+            }, []);
+            const fetchDue = useCallback(() => api('/dashboard/firms/followup-due').then(d => setDueFirms(d.firms || [])).catch(() => { }), []);
+            const fetchLogs = useCallback(() => api('/logs/').then(d => setLogs(d.entries || [])).catch(() => { }), []);
+
+            useEffect(() => { fetchAuth(); }, []);
+            useEffect(() => {
+                if (authState.authenticated) {
+                    fetchSummary(); fetchFirms(activeFilter); fetchDue(); fetchLogs();
+                }
+            }, [authState.authenticated, activeFilter]);
+
+            // ─── Actions ───
+            async function handleLogin() {
+                try {
+                    const data = await api('/auth/login', { method: 'POST' });
+                    if (data.authenticated) { setAuthState(data); return; }
+                    setAuthState(prev => ({ ...prev, flow: data }));
+                } catch (e) { showToast(e.message, 'error'); }
+            }
+
+            async function handleComplete() {
+                try {
+                    const data = await api('/auth/complete', { method: 'POST' });
+                    setAuthState({ ...data, flow: null });
+                    if (data.authenticated) showToast('Signed in successfully!');
+                    else showToast(data.error_description || 'Authentication failed', 'error');
+                } catch (e) { showToast(e.message, 'error'); }
+            }
+
+            async function handleLogout() {
+                await api('/auth/logout', { method: 'POST' });
+                setAuthState({ authenticated: false });
+                showToast('Logged out.');
+            }
+
+            async function handleSync() {
+                setLoading(l => ({ ...l, sync: true }));
+                try {
+                    await api('/dashboard/sync', { method: 'POST' });
+                    await fetchSummary(); await fetchFirms(activeFilter); await fetchDue();
+                    showToast('Spreadsheet synced!');
+                } catch (e) { showToast(e.message, 'error'); }
+                setLoading(l => ({ ...l, sync: false }));
+            }
+
+            async function handleSend(emailCol, dryRun) {
+                setLoading(l => ({ ...l, send: true }));
+                try {
+                    const data = await api('/outreach/send', {
+                        method: 'POST',
+                        body: JSON.stringify({ email_column: emailCol, dry_run: dryRun }),
+                    });
+                    showToast(data.message);
+                    await fetchSummary(); await fetchFirms(activeFilter); await fetchLogs();
+                } catch (e) { showToast(e.message, 'error'); }
+                setLoading(l => ({ ...l, send: false }));
+            }
+
+            async function handleFollowUp(dryRun) {
+                setLoading(l => ({ ...l, followup: true }));
+                try {
+                    const data = await api('/outreach/followup', {
+                        method: 'POST',
+                        body: JSON.stringify({ dry_run: dryRun }),
+                    });
+                    showToast(data.message);
+                    await fetchSummary(); await fetchFirms(activeFilter); await fetchDue(); await fetchLogs();
+                } catch (e) { showToast(e.message, 'error'); }
+                setLoading(l => ({ ...l, followup: false }));
+            }
+
+            async function handleCheckInbox(dryRun) {
+                setLoading(l => ({ ...l, inbox: true }));
+                try {
+                    const data = await api('/outreach/check-inbox', {
+                        method: 'POST',
+                        body: JSON.stringify({ dry_run: dryRun }),
+                    });
+                    showToast(`${data.message} ${data.replies_detected} replies detected.`);
+                    await fetchSummary(); await fetchFirms(activeFilter); await fetchDue(); await fetchLogs();
+                } catch (e) { showToast(e.message, 'error'); }
+                setLoading(l => ({ ...l, inbox: false }));
+            }
+
+            function handleFilter(status) {
+                setActiveFilter(status);
+                fetchFirms(status);
+            }
+
+            // ─── Render ───
+            return (
+                <div className="min-h-screen">
+                    {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+                    {/* Header */}
+                    <header className="bg-white shadow-sm border-b border-gray-200">
+                        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+                            <div>
+                                <h1 className="text-xl font-bold text-gray-800">Outreach Automation</h1>
+                                <p className="text-xs text-gray-400">Architecture Firm Business Development</p>
+                            </div>
+                            <div className="flex items-center gap-4">
+                                {authState.authenticated && (
+                                    <button onClick={handleSync} disabled={loading.sync}
+                                        className="text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50">
+                                        {loading.sync ? 'Syncing...' : '↻ Sync Spreadsheet'}
+                                    </button>
+                                )}
+                                <AuthPanel authState={authState} onLogin={handleLogin}
+                                    onComplete={handleComplete} onLogout={handleLogout} />
+                            </div>
+                        </div>
+                    </header>
+
+                    {!authState.authenticated && !authState.flow ? (
+                        <div className="max-w-md mx-auto mt-24 text-center">
+                            <h2 className="text-2xl font-bold text-gray-700 mb-3">Welcome</h2>
+                            <p className="text-gray-500 mb-6">Sign in with your Microsoft 365 account to get started.</p>
+                            <button onClick={handleLogin}
+                                className="bg-blue-600 text-white px-6 py-3 rounded-lg text-lg hover:bg-blue-700">
+                                Sign in with Microsoft
+                            </button>
+                        </div>
+                    ) : (
+                        <main className="max-w-7xl mx-auto px-6 py-6">
+                            {/* Tabs */}
+                            <div className="flex gap-1 mb-6 bg-gray-200 rounded-lg p-1 w-fit">
+                                {[['overview', 'Overview'], ['outreach', 'Send Outreach'], ['log', 'Activity Log']].map(([key, label]) => (
+                                    <button key={key} onClick={() => setTab(key)}
+                                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === key ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-600 hover:text-gray-800'
+                                            }`}>
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Overview Tab */}
+                            {tab === 'overview' && (
+                                <div>
+                                    <StatusCards summary={summary} onFilter={handleFilter} />
+                                    {activeFilter && (
+                                        <p className="text-sm text-gray-500 mb-3">
+                                            Showing: <StatusBadge status={activeFilter} />
+                                            <button onClick={() => handleFilter(null)} className="ml-2 text-blue-600 hover:underline text-xs">Clear filter</button>
+                                        </p>
+                                    )}
+                                    <FirmsTable firms={firms} loading={false} />
+                                </div>
+                            )}
+
+                            {/* Outreach Tab */}
+                            {tab === 'outreach' && (
+                                <div>
+                                    <OutreachPanel onSend={handleSend} loading={loading.send} />
+                                    <FollowUpPanel dueFirms={dueFirms} onTrigger={handleFollowUp} loading={loading.followup} />
+                                    <InboxPanel contactedCount={(summary?.by_status?.['email gesendet'] || 0) + (summary?.by_status?.['follow up gesendet'] || 0) + (summary?.by_status?.['follow-up fällig'] || 0)}
+                                        onCheck={handleCheckInbox} loading={loading.inbox} />
+                                </div>
+                            )}
+
+                            {/* Log Tab */}
+                            {tab === 'log' && (
+                                <ActivityLog logs={logs} loading={false} onRefresh={fetchLogs} />
+                            )}
+                        </main>
+                    )}
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+
+</html>
