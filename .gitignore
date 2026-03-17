@@ -1,0 +1,30 @@
+# Environment variables — never commit real credentials
+.env
+.env.local
+
+# Auth token cache — contains live Microsoft OAuth tokens
+outreach-tool/backend/.token_cache.json
+
+# SQLite database — local runtime data
+outreach-tool/backend/outreach.db
+
+# Real client data spreadsheets — sensitive business data
+outreach-tool/backend/data/*.xlsx
+outreach-tool/backend/data/*.xls
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+outreach-tool/backend/venv/
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# IDEs
+.vscode/
+.idea/
