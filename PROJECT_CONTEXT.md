@@ -173,9 +173,9 @@ The current workflow is entirely manual: the user opens OneDrive, navigates to a
 - **App type:** Public client (Allow public client flows = Yes)
 - **Redirect URI:** `http://localhost` (Mobile/Desktop)
 - **Auth flow:** Device code flow
-- **App registered in:** UBC organizational tenant (single-tenant)
-  - App ID: `b344f9c2-b92a-4c47-9d34-a521e5ee2dda`
-  - Tenant ID: `c3c2a0ee-8dd5-4602-9b8f-6eefaff8b7ee`
+- **App registered in:** Organizational tenant (single-tenant)
+  - App ID: `<configured in .env>`
+  - Tenant ID: `<configured in .env>`
 
 > **Important:** A previous app registration existed under a personal Microsoft (Hotmail) tenant but was abandoned because:
 > 1. Personal accounts lack SharePoint Online (SPO) license → OneDrive Graph API calls fail with "Tenant does not have a SPO license"
